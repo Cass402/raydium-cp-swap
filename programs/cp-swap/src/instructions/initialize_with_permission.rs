@@ -343,7 +343,7 @@ pub fn initialize_with_permission(
         ctx.accounts.observation_state.key(),
         creator_fee_on,
         true,
-    );
+    )?;
 
     Ok(())
 }

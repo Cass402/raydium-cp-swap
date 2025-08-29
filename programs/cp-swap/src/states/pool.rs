@@ -147,7 +147,7 @@ impl PoolState {
         observation_key: Pubkey,
         creator_fee_on: CreatorFeeOn,
         enable_creator_fee: bool,
-    ) {
+    ) -> Result<()> {
         self.amm_config = amm_config.key();
         self.pool_creator = pool_creator.key();
         self.token_0_vault = token_0_vault;
@@ -168,19 +168,29 @@ impl PoolState {
         self.fund_fees_token_0 = 0;
         self.fund_fees_token_1 = 0;
         self.open_time = open_time;
-        self.recent_epoch = Clock::get().unwrap().epoch;
+        self.recent_epoch = Clock::get()?.epoch;
         self.creator_fee_on = creator_fee_on.to_u8();
         self.enable_creator_fee = enable_creator_fee;
         self.padding1 = [0u8; 6];
         self.creator_fees_token_0 = 0;
         self.creator_fees_token_1 = 0;
         self.padding = [0u64; 28];
+        Ok(())
     }
 
-    pub fn set_status(&mut self, status: u8) {
-        self.status = status
+    /// Set the pool status with validation
+    /// Only accepts status values 0-7 (bits 0-2)
+    pub fn set_status(&mut self, status: u8) -> Result<()> {
+        require!(status <= 7, ErrorCode::InvalidInput);
+        self.status = status;
+        Ok(())
     }
 
+    /// Set the pool status by individual bit flags
+    /// 
+    /// # Arguments
+    /// * `bit` - The status bit to modify (Deposit, Withdraw, or Swap)
+    /// * `flag` - Whether to enable or disable the operation
     pub fn set_status_by_bit(&mut self, bit: PoolStatusBitIndex, flag: PoolStatusBitFlag) {
         let s = u8::from(1) << (bit as u8);
         if flag == PoolStatusBitFlag::Disable {
@@ -191,12 +201,28 @@ impl PoolState {
         }
     }
 
-    /// Get status by bit, if it is `noraml` status, return true
+    /// Get status by bit, if it is `normal` status, return true
+    /// 
+    /// # Arguments
+    /// * `bit` - The status bit to check (Deposit, Withdraw, or Swap)
+    /// 
+    /// # Returns
+    /// * `true` if the operation is enabled (normal status)
+    /// * `false` if the operation is disabled
     pub fn get_status_by_bit(&self, bit: PoolStatusBitIndex) -> bool {
         let status = u8::from(1) << (bit as u8);
         self.status.bitand(status) == 0
     }
 
+    /// Calculate vault amounts excluding all fees
+    /// 
+    /// # Arguments
+    /// * `vault_0` - Total amount in token_0 vault
+    /// * `vault_1` - Total amount in token_1 vault
+    /// 
+    /// # Returns
+    /// * `Ok((token_0_amount, token_1_amount))` - Amounts available for trading
+    /// * `Err` - If overflow occurs or insufficient vault balance
     pub fn vault_amount_without_fee(&self, vault_0: u64, vault_1: u64) -> Result<(u64, u64)> {
         let fees_token_0 = self
             .protocol_fees_token_0
@@ -228,6 +254,16 @@ impl PoolState {
         ))
     }
 
+    /// Update liquidity provider supply with checked arithmetic
+    /// 
+    /// # Arguments
+    /// * `liquidity_delta` - Amount to add or subtract
+    /// * `add` - If true, add liquidity; if false, subtract
+    /// * `recent_epoch` - Current epoch to record
+    /// 
+    /// # Returns
+    /// * `Ok(())` - If update succeeded
+    /// * `Err(ErrorCode::MathOverflow)` - If arithmetic overflow/underflow occurs
     pub fn update_lp_supply(
         &mut self,
         liquidity_delta: u64,
@@ -339,29 +375,43 @@ impl PoolState {
                 self.protocol_fees_token_0 = self
                     .protocol_fees_token_0
                     .checked_add(protocol_fee)
-                    .unwrap();
-                self.fund_fees_token_0 = self.fund_fees_token_0.checked_add(fund_fee).unwrap();
+                    .ok_or(ErrorCode::MathOverflow)?;
+                self.fund_fees_token_0 = self
+                    .fund_fees_token_0
+                    .checked_add(fund_fee)
+                    .ok_or(ErrorCode::MathOverflow)?;
 
                 if is_creator_fee_on_input {
-                    self.creator_fees_token_0 =
-                        self.creator_fees_token_0.checked_add(creator_fee).unwrap();
+                    self.creator_fees_token_0 = self
+                        .creator_fees_token_0
+                        .checked_add(creator_fee)
+                        .ok_or(ErrorCode::MathOverflow)?;
                 } else {
-                    self.creator_fees_token_1 =
-                        self.creator_fees_token_1.checked_add(creator_fee).unwrap();
+                    self.creator_fees_token_1 = self
+                        .creator_fees_token_1
+                        .checked_add(creator_fee)
+                        .ok_or(ErrorCode::MathOverflow)?;
                 }
             }
             TradeDirection::OneForZero => {
                 self.protocol_fees_token_1 = self
                     .protocol_fees_token_1
                     .checked_add(protocol_fee)
-                    .unwrap();
-                self.fund_fees_token_1 = self.fund_fees_token_1.checked_add(fund_fee).unwrap();
+                    .ok_or(ErrorCode::MathOverflow)?;
+                self.fund_fees_token_1 = self
+                    .fund_fees_token_1
+                    .checked_add(fund_fee)
+                    .ok_or(ErrorCode::MathOverflow)?;
                 if is_creator_fee_on_input {
-                    self.creator_fees_token_1 =
-                        self.creator_fees_token_1.checked_add(creator_fee).unwrap();
+                    self.creator_fees_token_1 = self
+                        .creator_fees_token_1
+                        .checked_add(creator_fee)
+                        .ok_or(ErrorCode::MathOverflow)?;
                 } else {
-                    self.creator_fees_token_0 =
-                        self.creator_fees_token_0.checked_add(creator_fee).unwrap();
+                    self.creator_fees_token_0 = self
+                        .creator_fees_token_0
+                        .checked_add(creator_fee)
+                        .ok_or(ErrorCode::MathOverflow)?;
                 }
             }
         };
@@ -384,7 +434,7 @@ pub mod pool_test {
         #[test]
         fn get_set_status_by_bit() {
             let mut pool_state = PoolState::default();
-            pool_state.set_status(4); // 0000100
+            pool_state.set_status(4).unwrap(); // 0000100
             assert_eq!(
                 pool_state.get_status_by_bit(PoolStatusBitIndex::Swap),
                 false
@@ -419,7 +469,7 @@ pub mod pool_test {
                 false
             );
 
-            pool_state.set_status(5); // 0000101
+            pool_state.set_status(5).unwrap(); // 0000101
             assert_eq!(
                 pool_state.get_status_by_bit(PoolStatusBitIndex::Swap),
                 false
@@ -433,7 +483,7 @@ pub mod pool_test {
                 true
             );
 
-            pool_state.set_status(7); // 0000111
+            pool_state.set_status(7).unwrap(); // 0000111
             assert_eq!(
                 pool_state.get_status_by_bit(PoolStatusBitIndex::Swap),
                 false
@@ -447,7 +497,7 @@ pub mod pool_test {
                 false
             );
 
-            pool_state.set_status(3); // 0000011
+            pool_state.set_status(3).unwrap(); // 0000011
             assert_eq!(pool_state.get_status_by_bit(PoolStatusBitIndex::Swap), true);
             assert_eq!(
                 pool_state.get_status_by_bit(PoolStatusBitIndex::Deposit),
@@ -457,6 +507,24 @@ pub mod pool_test {
                 pool_state.get_status_by_bit(PoolStatusBitIndex::Withdraw),
                 false
             );
+        }
+
+        #[test]
+        fn set_status_validation() {
+            let mut pool_state = PoolState::default();
+            
+            // Valid status values (0-7) should work
+            for status in 0..=7u8 {
+                assert!(pool_state.set_status(status).is_ok());
+                assert_eq!(pool_state.status, status);
+            }
+            
+            // Invalid status values (8-255) should fail
+            for status in 8..=255u8 {
+                assert!(pool_state.set_status(status).is_err());
+                // Status should remain unchanged
+                assert_eq!(pool_state.status, 7); // Last valid value set
+            }
         }
     }
 }
