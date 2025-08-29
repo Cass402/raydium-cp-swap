@@ -15,7 +15,7 @@ pub struct UpdatePoolStatus<'info> {
 pub fn update_pool_status(ctx: Context<UpdatePoolStatus>, status: u8) -> Result<()> {
     require_gte!(255, status);
     let mut pool_state = ctx.accounts.pool_state.load_mut()?;
-    pool_state.set_status(status);
+    pool_state.set_status(status)?;
     pool_state.recent_epoch = Clock::get()?.epoch;
     Ok(())
 }

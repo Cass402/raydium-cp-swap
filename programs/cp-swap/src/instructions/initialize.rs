@@ -330,7 +330,7 @@ pub fn initialize(
         ctx.accounts.observation_state.key(),
         CreatorFeeOn::BothToken,
         false,
-    );
+    )?;
 
     Ok(())
 }
